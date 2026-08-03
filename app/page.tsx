@@ -1,11 +1,13 @@
+import Link from "next/link";
+
 const navItems = [
-  { label: "Dashboard", icon: "▣", active: true },
-  { label: "Technicians", icon: "👥" },
-  { label: "Cases", icon: "📋" },
-  { label: "Interviews", icon: "🗓️" },
-  { label: "Map", icon: "🗺️" },
-  { label: "Reports", icon: "📈" },
-  { label: "Settings", icon: "⚙️" },
+  { label: "Dashboard", icon: "▣", active: true, href: "/" },
+  { label: "Technicians", icon: "👥", href: "/technicians" },
+  { label: "Cases", icon: "📋", href: "#" },
+  { label: "Interviews", icon: "🗓️", href: "#" },
+  { label: "Map", icon: "🗺️", href: "#" },
+  { label: "Reports", icon: "📈", href: "#" },
+  { label: "Settings", icon: "⚙️", href: "#" },
 ];
 
 const stats = [
@@ -49,19 +51,44 @@ export default function Home() {
           </div>
 
           <nav className="space-y-2">
-            {navItems.map((item) => (
-              <button
-                key={item.label}
-                className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
-                  item.active
-                    ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
-                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                }`}
-              >
-                <span className="text-base">{item.icon}</span>
-                {item.label}
-              </button>
-            ))}
+            {navItems.map((item) => {
+              const content = (
+                <>
+                  <span className="text-base">{item.icon}</span>
+                  {item.label}
+                </>
+              );
+
+              if (item.label === "Technicians") {
+                return (
+                  <Link
+                    key={item.label}
+                    href={item.href}
+                    className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
+                      item.active
+                        ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
+                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                    }`}
+                  >
+                    {content}
+                  </Link>
+                );
+              }
+
+              return (
+                <button
+                  key={item.label}
+                  type="button"
+                  className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
+                    item.active
+                      ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  }`}
+                >
+                  {content}
+                </button>
+              );
+            })}
           </nav>
         </aside>
 
