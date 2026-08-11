@@ -264,6 +264,35 @@ body {
     font-weight: 800;
   }
 
+  /* The Operations Center uses the shared shell navigation and top-bar controls. */
+  .atlas-page > .min-h-screen {
+    min-height: 0;
+    background: transparent;
+  }
+
+  .atlas-page > .min-h-screen > .mx-auto {
+    display: block;
+    max-width: none;
+  }
+
+  .atlas-page > .min-h-screen > .mx-auto > aside,
+  .atlas-page > .min-h-screen > .mx-auto > main > header {
+    display: none;
+  }
+
+  .atlas-page > .min-h-screen > .mx-auto > main {
+    padding: 32px;
+  }
+
+  .atlas-page > .min-h-screen > .mx-auto > main > section:nth-of-type(2) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .atlas-page > .min-h-screen > .mx-auto > main > section:nth-of-type(2) > section:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
   .atlas-page {
     width: 100%;
   }
