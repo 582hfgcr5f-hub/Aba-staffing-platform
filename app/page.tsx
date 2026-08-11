@@ -1,209 +1,54 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { DatabaseState } from "@/app/components/database-state";
+import { formatTime, formatUsDateTime } from "@/app/data/display-formatters";
+import { type DashboardActivity, fetchDashboardActivity } from "@/app/data/operational-adapter";
+import { useInterviews } from "@/app/data/interviews-store";
+import { useTechnicianDatabase } from "@/app/data/technicians-store";
+import { getSupabaseBrowserClient } from "@/app/lib/supabase/client";
 
 const navItems = [
-  { label: "Dashboard", icon: "▣", active: true, href: "/" },
-  { label: "Technicians", icon: "👥", href: "/technicians" },
-  { label: "Cases", icon: "📋", href: "#" },
-  { label: "Interviews", icon: "🗓️", href: "#" },
-  { label: "Map", icon: "🗺️", href: "#" },
-  { label: "Reports", icon: "📈", href: "#" },
-  { label: "Settings", icon: "⚙️", href: "#" },
-];
+  ["Dashboard", "▣", "/"], ["Staffing Queue", "✓", "/staffing-queue"], ["Technicians", "👥", "/technicians"], ["Cases", "📋", "/cases"], ["Interviews", "🗓️", "/interviews"], ["Map", "🗺️", "/map"], ["Reports", "📈", "#"], ["Settings", "⚙️", "#"],
+] as const;
 
-const stats = [
-  { label: "Active Cases", value: "24", change: "+4 this week", accent: "from-blue-600 to-cyan-500" },
-  { label: "Available Techs", value: "18", change: "6 on standby", accent: "from-sky-600 to-blue-500" },
-  { label: "Assigned Cases", value: "12", change: "3 pending review", accent: "from-indigo-600 to-blue-500" },
-  { label: "Interview Candidates", value: "9", change: "2 today", accent: "from-cyan-600 to-sky-500" },
-];
-
-const recentCases = [
-  { client: "Bright Path School", technician: "Maya Chen", status: "In Progress" },
-  { client: "Northview Clinic", technician: "Jordan Lee", status: "Scheduled" },
-  { client: "Riverstone Center", technician: "Elena Cruz", status: "Awaiting Approval" },
-];
-
-const technicians = [
-  { name: "Alicia Brooks", specialty: "Early Childhood", availability: "Available" },
-  { name: "Dev Patel", specialty: "Adult Services", availability: "On Route" },
-  { name: "Nina Flores", specialty: "School-Based", availability: "Available" },
-];
-
-const interviews = [
-  { time: "09:30", candidate: "Sophia Kim", role: "Behavior Technician" },
-  { time: "11:00", candidate: "Marcus Hall", role: "Clinical Supervisor" },
-  { time: "02:15", candidate: "Lena Ortiz", role: "RBT Candidate" },
-];
+function isActiveCase(status: string) { return status === "Active" || status === "Active Client"; }
+function isOpenCase(status: string) { return status === "Open" || status === "Open Client"; }
+function dayKey(value: string) { const date = new Date(value); return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`; }
+function activityIcon(type: string) { const value = type.toLowerCase(); return value.includes("interview") || value.includes("hired") ? "🗓" : value.includes("resume") || value.includes("document") ? "📄" : value.includes("assign") ? "✓" : value.includes("start") ? "▶" : value.includes("technician") ? "👥" : value.includes("case") ? "📋" : "•"; }
 
 export default function Home() {
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-800">
-      <div className="mx-auto flex max-w-7xl flex-col lg:flex-row">
-        <aside className="w-full border-b border-slate-200 bg-white/80 p-6 backdrop-blur lg:w-64 lg:border-b-0 lg:border-r">
-          <div className="mb-8 flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 text-lg font-semibold text-white shadow-lg shadow-blue-200">
-              AB
-            </div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-600">ABA</p>
-              <h2 className="text-lg font-semibold text-slate-900">Staffing Platform</h2>
-            </div>
-          </div>
+  const { technicians, cases, assignments, loading, errorMessage, refreshDatabase } = useTechnicianDatabase();
+  const { interviews, loading: interviewsLoading, errorMessage: interviewsError, refreshInterviews } = useInterviews();
+  const [activity, setActivity] = useState<DashboardActivity[]>([]);
+  const [activityError, setActivityError] = useState("");
 
-          <nav className="space-y-2">
-            {navItems.map((item) => {
-              const content = (
-                <>
-                  <span className="text-base">{item.icon}</span>
-                  {item.label}
-                </>
-              );
+  useEffect(() => {
+    const client = getSupabaseBrowserClient();
+    if (!client) return;
+    let cancelled = false;
+    void fetchDashboardActivity(client).then((items) => { if (!cancelled) { setActivity(items); setActivityError(""); } }).catch(() => { if (!cancelled) setActivityError("Recent activity is temporarily unavailable."); });
+    return () => { cancelled = true; };
+  }, [assignments, cases, interviews, technicians]);
 
-              if (item.label === "Technicians") {
-                return (
-                  <Link
-                    key={item.label}
-                    href={item.href}
-                    className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
-                      item.active
-                        ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
-                        : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                    }`}
-                  >
-                    {content}
-                  </Link>
-                );
-              }
+  const readiness = useMemo(() => cases.map((caseItem) => {
+    const assigned = assignments.some((assignment) => assignment.caseId === caseItem.id && assignment.status !== "Unassigned");
+    const schedule = caseItem.requiredDays.length > 0 && Boolean(caseItem.requiredStartTime && caseItem.requiredEndTime);
+    const location = Boolean(caseItem.address || (caseItem.latitude !== undefined && caseItem.longitude !== undefined));
+    return { caseItem, ready: assigned && Boolean(caseItem.bcba?.trim()) && Boolean(caseItem.startDate) && schedule && location };
+  }), [assignments, cases]);
 
-              return (
-                <button
-                  key={item.label}
-                  type="button"
-                  className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-medium transition ${
-                    item.active
-                      ? "bg-blue-600 text-white shadow-lg shadow-blue-200"
-                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                  }`}
-                >
-                  {content}
-                </button>
-              );
-            })}
-          </nav>
-        </aside>
+  const stats = useMemo(() => {
+    const now = new Date(); const weekStart = new Date(now); weekStart.setHours(0, 0, 0, 0); weekStart.setDate(weekStart.getDate() - weekStart.getDay()); const today = dayKey(now.toISOString());
+    return [["Active Technicians", technicians.filter((item) => item.status === "Active" || item.status === "Assigned").length], ["Available Technicians", technicians.filter((item) => item.status === "Available").length], ["Active Cases", cases.filter((item) => isActiveCase(item.status)).length], ["Open Cases", cases.filter((item) => isOpenCase(item.status)).length], ["Ready to Start", readiness.filter((item) => item.ready).length], ["Blocked Cases", readiness.filter((item) => !item.ready && !isActiveCase(item.caseItem.status)).length], ["Interviews Today", interviews.filter((item) => dayKey(item.scheduledAt) === today).length], ["Interviews This Week", interviews.filter((item) => new Date(item.scheduledAt) >= weekStart && new Date(item.scheduledAt) <= now).length]];
+  }, [cases, interviews, readiness, technicians]);
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">
-          <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-slate-200 bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-xl shadow-blue-100 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-100">Operations Center</p>
-              <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">Welcome back, team</h1>
-              <p className="mt-2 text-sm text-blue-50/90">Monitor staffing demand, technician readiness, and interview pipeline from one control center.</p>
-            </div>
-            <div className="rounded-2xl border border-white/20 bg-white/10 px-4 py-3 backdrop-blur">
-              <p className="text-sm text-blue-50">Today&apos;s coverage</p>
-              <p className="text-xl font-semibold">94% staffed</p>
-            </div>
-          </header>
+  const todaysInterviews = useMemo(() => { const today = dayKey(new Date().toISOString()); return interviews.filter((item) => dayKey(item.scheduledAt) === today).sort((left, right) => Date.parse(left.scheduledAt) - Date.parse(right.scheduledAt)); }, [interviews]);
+  const openCases = useMemo(() => cases.filter((item) => isOpenCase(item.status)).sort((left, right) => (left.urgency === "High" ? 0 : left.urgency === "Medium" ? 1 : 2) - (right.urgency === "High" ? 0 : right.urgency === "Medium" ? 1 : 2)).slice(0, 10), [cases]);
 
-          <section className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {stats.map((stat) => (
-              <div key={stat.label} className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
-                <div className={`inline-flex rounded-full bg-gradient-to-r ${stat.accent} px-3 py-1 text-xs font-semibold text-white`}>
-                  {stat.label}
-                </div>
-                <div className="mt-4 flex items-end justify-between">
-                  <div>
-                    <p className="text-3xl font-semibold text-slate-900">{stat.value}</p>
-                    <p className="mt-1 text-sm text-slate-500">{stat.change}</p>
-                  </div>
-                  <div className="h-10 w-10 rounded-full bg-slate-100" />
-                </div>
-              </div>
-            ))}
-          </section>
+  if (loading || interviewsLoading) return <DatabaseState title="Loading dashboard" message="Fetching live operational data from Supabase." />;
+  if (errorMessage || interviewsError) return <DatabaseState title="Dashboard unavailable" message={errorMessage ?? interviewsError ?? "Live operational data is unavailable."} actionLabel="Retry" onAction={() => { void refreshDatabase(); void refreshInterviews(); }} />;
 
-          <section className="grid gap-6 xl:grid-cols-[1.6fr_0.9fr]">
-            <div className="space-y-6">
-              <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-center justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-slate-900">Recent Active Cases</h2>
-                    <p className="text-sm text-slate-500">Live status of the most active caseloads</p>
-                  </div>
-                  <button className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">View all</button>
-                </div>
-                <div className="overflow-hidden rounded-2xl border border-slate-200">
-                  <table className="min-w-full text-left text-sm">
-                    <thead className="bg-slate-50 text-slate-600">
-                      <tr>
-                        <th className="px-4 py-3 font-medium">Client</th>
-                        <th className="px-4 py-3 font-medium">Technician</th>
-                        <th className="px-4 py-3 font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recentCases.map((item) => (
-                        <tr key={item.client} className="border-t border-slate-200 bg-white">
-                          <td className="px-4 py-3 font-medium text-slate-800">{item.client}</td>
-                          <td className="px-4 py-3 text-slate-600">{item.technician}</td>
-                          <td className="px-4 py-3">
-                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                              {item.status}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-semibold text-slate-900">Available Technicians</h2>
-                <p className="mt-1 text-sm text-slate-500">Quick access to ready-to-deploy staff</p>
-                <div className="mt-4 space-y-3">
-                  {technicians.map((person) => (
-                    <div key={person.name} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <div>
-                        <p className="font-medium text-slate-800">{person.name}</p>
-                        <p className="text-sm text-slate-500">{person.specialty}</p>
-                      </div>
-                      <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700">
-                        {person.availability}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-4 flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">Upcoming Interviews</h2>
-                  <p className="text-sm text-slate-500">Scheduled conversations this afternoon</p>
-                </div>
-                <button className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">+ Add</button>
-              </div>
-              <div className="space-y-3">
-                {interviews.map((interview) => (
-                  <div key={interview.candidate} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="font-semibold text-slate-800">{interview.candidate}</p>
-                        <p className="text-sm text-slate-500">{interview.role}</p>
-                      </div>
-                      <div className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-blue-700 shadow-sm">
-                        {interview.time}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </section>
-        </main>
-      </div>
-    </div>
-  );
+  return <div className="min-h-screen bg-slate-50 text-slate-800"><div className="mx-auto flex max-w-7xl flex-col lg:flex-row"><aside className="w-full border-b border-slate-200 bg-white/80 p-6 backdrop-blur lg:w-64 lg:border-b-0 lg:border-r"><div className="mb-8 flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 text-lg font-semibold text-white shadow-lg shadow-blue-200">AB</div><div><p className="text-xs font-semibold uppercase tracking-[0.24em] text-blue-600">ABA</p><h2 className="text-lg font-semibold text-slate-900">Staffing Platform</h2></div></div><nav className="space-y-2">{navItems.map(([label, icon, href]) => <Link key={label} href={href} className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition ${label === "Dashboard" ? "bg-blue-600 text-white shadow-lg shadow-blue-200" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"}`}><span className="text-base">{icon}</span>{label}</Link>)}</nav></aside><main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8"><header className="mb-6 rounded-[28px] border border-slate-200 bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-xl shadow-blue-100"><p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-100">Operations Center</p><h1 className="mt-2 text-2xl font-semibold sm:text-3xl">Staffing Dashboard</h1><p className="mt-2 text-sm text-blue-50/90">Live staffing, case readiness, and recruiting operations.</p></header><section className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{stats.map(([label, value]) => <div key={String(label)} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"><p className="text-xs font-semibold text-slate-500">{label}</p><p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p></div>)}</section><section className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5"><Link href="/technicians?add=1" className="rounded-xl bg-blue-600 px-4 py-4 text-center text-sm font-semibold text-white hover:bg-blue-700">Add Technician</Link><Link href="/cases?add=1" className="rounded-xl bg-blue-600 px-4 py-4 text-center text-sm font-semibold text-white hover:bg-blue-700">Add Case</Link><Link href="/interviews?add=1" className="rounded-xl bg-blue-600 px-4 py-4 text-center text-sm font-semibold text-white hover:bg-blue-700">Add Interview</Link><Link href="/staffing-queue" className="rounded-xl border border-slate-300 bg-white px-4 py-4 text-center text-sm font-semibold text-slate-700 hover:border-blue-500 hover:bg-blue-50">Open Staffing Queue</Link><Link href="/map" className="rounded-xl border border-slate-300 bg-white px-4 py-4 text-center text-sm font-semibold text-slate-700 hover:border-blue-500 hover:bg-blue-50">Open Map</Link></section><section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]"><div className="space-y-6"><section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-semibold text-slate-900">Open Cases</h2><p className="text-sm text-slate-500">Highest-priority open cases</p></div><Link href="/cases" className="text-sm font-semibold text-blue-700 hover:text-blue-800">View all</Link></div><div className="mt-4 space-y-3">{openCases.map((caseItem) => { const assignment = assignments.find((item) => item.caseId === caseItem.id && item.status !== "Unassigned"); const technician = technicians.find((item) => item.id === assignment?.technicianId); return <div key={caseItem.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold text-slate-900">{caseItem.name}</p><p className="mt-1 text-sm text-slate-600">{caseItem.city}, {caseItem.state} · {caseItem.status}</p><p className="mt-1 text-xs text-slate-500">Assigned: {technician?.name ?? "Unassigned"}</p></div><div className="flex flex-wrap gap-2"><Link href={`/cases/${caseItem.id}`} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700">Open Case</Link><Link href={`/cases/${caseItem.id}`} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-blue-500 hover:bg-blue-50">Find Technician</Link></div></div></div>; })}{openCases.length === 0 ? <p className="text-sm text-slate-500">No open cases.</p> : null}</div></section><section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between gap-3"><div><h2 className="text-lg font-semibold text-slate-900">Today&apos;s Interviews</h2><p className="text-sm text-slate-500">Scheduled candidate conversations</p></div><Link href="/interviews" className="text-sm font-semibold text-blue-700 hover:text-blue-800">View all</Link></div><div className="mt-4 space-y-3">{todaysInterviews.map((interview) => <Link key={interview.id} href={`/interviews/${interview.id}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 hover:border-blue-300 hover:bg-blue-50"><div><p className="font-semibold text-slate-900">{interview.candidateName}</p><p className="mt-1 text-sm text-slate-600">{formatTime(new Date(interview.scheduledAt).toTimeString().slice(0, 5))} · {interview.city}</p></div><span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-blue-700">{interview.rating || "Rating pending"}</span></Link>)}{todaysInterviews.length === 0 ? <p className="text-sm text-slate-500">No interviews scheduled today.</p> : null}</div></section></div><section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><h2 className="text-lg font-semibold text-slate-900">Recent Activity</h2><p className="mt-1 text-sm text-slate-500">Newest operational events first</p>{activityError ? <p className="mt-4 text-sm text-amber-700">{activityError}</p> : null}<div className="mt-4 space-y-3">{activity.map((item) => { const interview = item.interviewId ? interviews.find((entry) => entry.id === item.interviewId) : undefined; const technician = item.technicianId ? technicians.find((entry) => entry.id === item.technicianId) : undefined; const caseItem = item.caseId ? cases.find((entry) => entry.id === item.caseId) : undefined; const subject = interview?.candidateName ?? technician?.name ?? caseItem?.name; return <div key={item.id} className="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-sm">{activityIcon(item.eventType)}</span><div className="min-w-0"><p className="font-semibold text-slate-900">{item.eventType}</p><p className="truncate text-sm text-slate-600">{subject ? `${subject} · ` : ""}{item.detail || "Operational update recorded."}</p><p className="mt-1 text-xs text-slate-500">{formatUsDateTime(item.createdAt)}</p></div></div>; })}{!activityError && activity.length === 0 ? <p className="text-sm text-slate-500">No activity has been recorded yet.</p> : null}</div></section></section></main></div></div>;
 }
