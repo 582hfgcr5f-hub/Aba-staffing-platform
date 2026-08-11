@@ -1044,7 +1044,7 @@ function MapPageContent() {
               ) : null}
             </section>
 
-            <section className="mb-6 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
+            <section className="mobile-filter-chips mb-6 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-wrap gap-2">
                   {(["All", "IA", "NM"] as const).map((option) => (
@@ -1081,7 +1081,7 @@ function MapPageContent() {
                   <div className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-600">Live</div>
                 </div>
                 {apiKey ? (
-                  <div className="h-[440px] overflow-hidden rounded-[24px] border border-slate-200">
+                  <div className="mobile-map-canvas h-[440px] overflow-hidden rounded-[24px] border border-slate-200">
                     <APIProvider
                       apiKey={apiKey}
                       libraries={["places", "routes"]}
@@ -1150,7 +1150,7 @@ function MapPageContent() {
                 {missingCoordinateCount > 0 ? <p className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">Location diagnostic: {missingCoordinateCount} saved record{missingCoordinateCount === 1 ? " is" : "s are"} missing coordinates. Select the record and use Confirm Location.</p> : null}
               </div>
 
-              <aside className="space-y-4 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              <section className="space-y-4 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                 {focusedTechnician ? (
                   <div className="rounded-[24px] border border-blue-200 bg-blue-50 p-4">
                     <div className="flex items-center justify-between gap-2">
@@ -1289,7 +1289,7 @@ function MapPageContent() {
                     <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">{assignmentMessage}</div>
                   ) : null}
                 </div>
-              </aside>
+              </section>
             </section>
 
             {pendingMatch ? (

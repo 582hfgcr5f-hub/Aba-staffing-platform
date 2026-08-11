@@ -286,7 +286,7 @@ export default function TechniciansPage() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
       <div className="mx-auto flex max-w-[1700px] flex-col lg:flex-row">
-        <aside className="w-full border-b border-slate-200 bg-white/80 p-6 backdrop-blur lg:w-72 lg:border-b-0 lg:border-r">
+        <aside className="app-nav w-full border-b border-slate-200 bg-white/80 p-6 backdrop-blur lg:w-72 lg:border-b-0 lg:border-r">
           <div className="mb-8 flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-500 text-lg font-semibold text-white shadow-lg shadow-blue-200">
               AB
@@ -316,7 +316,7 @@ export default function TechniciansPage() {
         </aside>
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8">
-          <header className="mb-6 flex flex-col gap-4 rounded-[28px] border border-slate-200 bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-xl shadow-blue-100 lg:flex-row lg:items-center lg:justify-between">
+          <header className="desktop-page-header mb-6 flex flex-col gap-4 rounded-[28px] border border-slate-200 bg-gradient-to-r from-blue-700 via-blue-600 to-cyan-500 p-6 text-white shadow-xl shadow-blue-100 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-sm font-semibold uppercase tracking-[0.24em] text-blue-100">Technician Network</p>
               <h1 className="mt-2 text-2xl font-semibold sm:text-3xl">Field team overview</h1>
@@ -531,7 +531,7 @@ export default function TechniciansPage() {
                         router.push(profileHref);
                       }
                     }}
-                    className="flex h-full min-h-[360px] w-full cursor-pointer flex-col rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                    className="technician-list-card flex h-full min-h-[360px] w-full cursor-pointer flex-col rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                   >
                     <div className="mb-3 flex justify-end gap-2">
                       <button type="button" onClick={(event) => { event.stopPropagation(); openEditForm(tech); }} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">Edit Technician</button>
