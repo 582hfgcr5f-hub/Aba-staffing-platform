@@ -384,7 +384,7 @@ function evaluateSingleMatch(input: {
   }
 
   const driveLimit = technician.travelMinutes ?? parseTravelMinutes(technician.travelRadius) ?? 45;
-  if (routeInfo.routeStatus !== "ok") {
+  if (routeInfo.routeStatus !== "ok" && routeInfo.routeStatus !== "missing-coordinates") {
     reasons.push({ code: "route_unavailable", message: "Route request unavailable; travel needs confirmation." });
   }
 

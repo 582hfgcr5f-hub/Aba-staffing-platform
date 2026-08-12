@@ -9,7 +9,8 @@ import { formatScheduleText, formatTimeRange, formatUsDate, formatUsDateTime } f
 import { addOperationalNote, deleteOperationalNote, fetchOperationalActivity, fetchOperationalNotes, logOperationalActivity, type OperationalActivity, type OperationalNote } from "@/app/data/operational-adapter";
 import { useTechnicianDatabase } from "@/app/data/technicians-store";
 import { createTechnicianSlug, normalizeState } from "@/app/data/technicians-utils";
-import { type SharedMatchResult } from "@/app/data/staffing-types";
+import { type CaseProfile, type DayName, type SharedMatchResult } from "@/app/data/staffing-types";
+import { buildServiceLocationAddress, geocodeServiceLocation } from "@/app/data/geocoding";
 import { getSupabaseBrowserClient } from "@/app/lib/supabase/client";
 
 const navItems = [
@@ -34,15 +35,58 @@ function createAssignmentEmail(match: SharedMatchResult) {
   return `mailto:${encodeURIComponent(match.technician.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
+type CaseEditFormState = {
+  name: string;
+  city: string;
+  state: string;
+  status: CaseProfile["status"];
+  address: string;
+  zip: string;
+  contactName: string;
+  phone: string;
+  email: string;
+  preferredContact: string;
+  requiredDays: DayName[];
+  requiredStartTime: string;
+  requiredEndTime: string;
+  startDate: string;
+  bcba: string;
+  notes: string;
+};
+
+function createEditCaseState(caseItem: CaseProfile): CaseEditFormState {
+  return {
+    name: caseItem.name,
+    city: caseItem.city,
+    state: caseItem.state,
+    status: caseItem.status,
+    address: caseItem.address ?? "",
+    zip: caseItem.zip ?? "",
+    contactName: caseItem.contactName ?? "",
+    phone: caseItem.phone ?? "",
+    email: caseItem.email ?? "",
+    preferredContact: caseItem.preferredContact ?? "",
+    requiredDays: caseItem.requiredDays,
+    requiredStartTime: caseItem.requiredStartTime,
+    requiredEndTime: caseItem.requiredEndTime,
+    startDate: caseItem.startDate ?? "",
+    bcba: caseItem.bcba ?? "",
+    notes: caseItem.notes ?? "",
+  };
+}
+
 export default function CaseProfilePage() {
   const params = useParams<{ id: string }>();
-  const { cases, technicians, assignments, findMatchingTechnicians, assignCase, unassignCase, markCaseStarted, loading, errorMessage, refreshDatabase } = useTechnicianDatabase();
+  const { cases, technicians, assignments, findMatchingTechnicians, assignCase, unassignCase, markCaseStarted, upsertCase, loading, errorMessage, refreshDatabase } = useTechnicianDatabase();
   const [pendingMatch, setPendingMatch] = useState<SharedMatchResult | null>(null);
   const [message, setMessage] = useState("");
   const [notes, setNotes] = useState<OperationalNote[]>([]);
   const [activity, setActivity] = useState<OperationalActivity[]>([]);
   const [noteText, setNoteText] = useState("");
   const [operationalError, setOperationalError] = useState("");
+  const [isEditingCase, setIsEditingCase] = useState(false);
+  const [editCaseState, setEditCaseState] = useState<CaseEditFormState | null>(null);
+  const [editCaseError, setEditCaseError] = useState("");
 
   const caseItem = useMemo(() => cases.find((item) => item.id === params.id) ?? null, [cases, params.id]);
   const matches = useMemo(() => (caseItem ? findMatchingTechnicians(caseItem.id) : []), [caseItem, findMatchingTechnicians]);
@@ -88,6 +132,85 @@ export default function CaseProfilePage() {
     } catch (error) { setOperationalError(error instanceof Error ? error.message : "Unable to save note."); }
   }
 
+  async function saveEditedCase() {
+    if (!caseItem || !editCaseState) return;
+
+    const result = await upsertCase({
+      ...caseItem,
+      name: editCaseState.name.trim() || caseItem.name,
+      city: editCaseState.city.trim() || caseItem.city,
+      state: normalizeState(editCaseState.state || caseItem.state),
+      status: editCaseState.status,
+      address: editCaseState.address.trim() || undefined,
+      zip: editCaseState.zip.trim() || undefined,
+      contactName: editCaseState.contactName.trim() || undefined,
+      phone: editCaseState.phone.trim() || undefined,
+      email: editCaseState.email.trim() || undefined,
+      preferredContact: editCaseState.preferredContact.trim() || undefined,
+      requiredDays: editCaseState.requiredDays,
+      requiredStartTime: editCaseState.requiredStartTime,
+      requiredEndTime: editCaseState.requiredEndTime,
+      startDate: editCaseState.startDate || undefined,
+      bcba: editCaseState.bcba.trim() || undefined,
+      notes: editCaseState.notes.trim() || undefined,
+    });
+
+    if (!result.ok) {
+      setEditCaseError(result.message);
+      return;
+    }
+
+    setIsEditingCase(false);
+    setEditCaseState(null);
+    setEditCaseError("");
+    setMessage("Case updated.");
+  }
+
+  async function confirmServiceLocation() {
+    if (!caseItem) return;
+
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
+    const fullAddress = buildServiceLocationAddress({
+      address: caseItem.address,
+      city: caseItem.city,
+      state: caseItem.state,
+      zip: caseItem.zip,
+    });
+
+    if (!fullAddress || !apiKey) {
+      setMessage("Google Maps API key is missing or the case address is incomplete.");
+      return;
+    }
+
+    try {
+      const geocode = await geocodeServiceLocation({
+        address: caseItem.address,
+        city: caseItem.city,
+        state: caseItem.state,
+        zip: caseItem.zip,
+      }, apiKey);
+
+      const result = await upsertCase({
+        ...caseItem,
+        address: geocode.formattedAddress || caseItem.address,
+        city: geocode.city || caseItem.city,
+        state: geocode.state || caseItem.state,
+        zip: geocode.zip || caseItem.zip,
+        latitude: geocode.lat,
+        longitude: geocode.lng,
+      });
+
+      if (!result.ok) {
+        throw new Error(result.message);
+      }
+
+      setMessage("Service location saved.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown geocoding error.";
+      setMessage(detail);
+    }
+  }
+
   if (loading) {
     return <DatabaseState title="Loading case details" message="Fetching the latest case and assignment data from Supabase." />;
   }
@@ -116,8 +239,97 @@ export default function CaseProfilePage() {
         <DetailNavigation listHref="/cases" listLabel="Cases" currentLabel={caseItem.name} badge="Case Profile" />
 
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm sm:p-8">
-          <h1 className="text-2xl font-semibold text-slate-900">{caseItem.name}</h1>
+          <div className="flex items-start justify-between gap-3">
+            <h1 className="text-2xl font-semibold text-slate-900">{caseItem.name}</h1>
+            <button type="button" onClick={() => { setEditCaseState(createEditCaseState(caseItem)); setEditCaseError(""); setIsEditingCase(true); }} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Edit Case</button>
+          </div>
           <p className="mt-2 text-slate-600">{caseItem.address || `${caseItem.city}, ${caseItem.state}`}</p>
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm font-semibold text-slate-800">Service Location</span>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${caseItem.latitude !== undefined && caseItem.longitude !== undefined ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                {caseItem.latitude !== undefined && caseItem.longitude !== undefined ? "Location Confirmed" : "Needs Confirmation"}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button type="button" onClick={() => void confirmServiceLocation()} className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white">
+                {caseItem.latitude !== undefined && caseItem.longitude !== undefined ? "Reconfirm Location" : "Confirm Location"}
+              </button>
+            </div>
+          </div>
+          {isEditingCase && editCaseState ? (
+            <div className="mt-4 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-900">Edit Case</h2>
+                <button type="button" onClick={() => { setIsEditingCase(false); setEditCaseError(""); setEditCaseState(null); }} className="text-xs font-semibold text-slate-600">Close</button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="text-sm text-slate-600">Client name
+                  <input value={editCaseState.name} onChange={(event) => setEditCaseState((current) => current ? { ...current, name: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Status
+                  <select value={editCaseState.status} onChange={(event) => setEditCaseState((current) => current ? { ...current, status: event.target.value as CaseProfile["status"] } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2">
+                    {(["Open", "Assigned", "Active", "Pending", "On Hold", "Open Client", "Assigned Client", "Active Client"] as const).map((status) => (<option key={status} value={status}>{status}</option>))}
+                  </select>
+                </label>
+                <label className="text-sm text-slate-600">Address
+                  <input value={editCaseState.address} onChange={(event) => setEditCaseState((current) => current ? { ...current, address: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">City
+                  <input value={editCaseState.city} onChange={(event) => setEditCaseState((current) => current ? { ...current, city: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">State
+                  <input value={editCaseState.state} onChange={(event) => setEditCaseState((current) => current ? { ...current, state: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">ZIP
+                  <input value={editCaseState.zip} onChange={(event) => setEditCaseState((current) => current ? { ...current, zip: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Parent / guardian
+                  <input value={editCaseState.contactName} onChange={(event) => setEditCaseState((current) => current ? { ...current, contactName: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Phone
+                  <input value={editCaseState.phone} onChange={(event) => setEditCaseState((current) => current ? { ...current, phone: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Email
+                  <input value={editCaseState.email} onChange={(event) => setEditCaseState((current) => current ? { ...current, email: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Preferred contact
+                  <input value={editCaseState.preferredContact} onChange={(event) => setEditCaseState((current) => current ? { ...current, preferredContact: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Required start time
+                  <input type="time" value={editCaseState.requiredStartTime} onChange={(event) => setEditCaseState((current) => current ? { ...current, requiredStartTime: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Required end time
+                  <input type="time" value={editCaseState.requiredEndTime} onChange={(event) => setEditCaseState((current) => current ? { ...current, requiredEndTime: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">Start date
+                  <input type="date" value={editCaseState.startDate} onChange={(event) => setEditCaseState((current) => current ? { ...current, startDate: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <label className="text-sm text-slate-600">BCBA
+                  <input value={editCaseState.bcba} onChange={(event) => setEditCaseState((current) => current ? { ...current, bcba: event.target.value } : current)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+                <fieldset className="text-sm text-slate-600 md:col-span-2">
+                  <legend className="mb-2">Required days</legend>
+                  <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                    {(["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const).map((day) => (
+                      <label key={day} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-2 py-2">
+                        <input type="checkbox" checked={editCaseState.requiredDays.includes(day)} onChange={() => setEditCaseState((current) => current ? { ...current, requiredDays: current.requiredDays.includes(day) ? current.requiredDays.filter((item) => item !== day) : [...current.requiredDays, day] } : current)} />
+                        <span>{day}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <label className="text-sm text-slate-600 md:col-span-2">Notes
+                  <textarea value={editCaseState.notes} onChange={(event) => setEditCaseState((current) => current ? { ...current, notes: event.target.value } : current)} rows={3} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2" />
+                </label>
+              </div>
+              {editCaseError ? <p className="mt-3 text-sm text-rose-600">{editCaseError}</p> : null}
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void saveEditedCase()} className="rounded-2xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Save Changes</button>
+                <button type="button" onClick={() => { setIsEditingCase(false); setEditCaseState(null); setEditCaseError(""); }} className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
+              </div>
+            </div>
+          ) : null}
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"><p className="font-semibold text-slate-900">Parent / guardian</p><p className="mt-1 text-slate-600">{caseItem.contactName || "Not recorded"}</p><div className="mt-2 flex gap-2">{caseItem.phone ? <a href={`tel:${caseItem.phone}`} className="font-semibold text-blue-700">Call</a> : null}{caseItem.email ? <a href={`mailto:${caseItem.email}`} className="font-semibold text-blue-700">Email</a> : null}</div></div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"><p className="font-semibold text-slate-900">BCBA</p><p className="mt-1 text-slate-600">{caseItem.bcba || "Not assigned"}</p><div className="mt-2 flex gap-2">{caseItem.bcbaPhone ? <a href={`tel:${caseItem.bcbaPhone}`} className="font-semibold text-blue-700">Call</a> : null}{caseItem.bcbaEmail ? <a href={`mailto:${caseItem.bcbaEmail}`} className="font-semibold text-blue-700">Email</a> : null}</div></div>

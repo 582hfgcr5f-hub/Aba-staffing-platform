@@ -159,6 +159,18 @@ describe("shared matching engine", () => {
     expect(matches[0]?.readinessStatus).toBe("Ready to Assign");
   });
 
+  it("missing service coordinates do not block assignment", () => {
+    const matches = buildMatchesForCase({
+      caseItem: caseItem({ requiredDays: ["Monday"], requiredStartTime: "10:00", requiredEndTime: "12:00" }),
+      technicians: [tech({ hours: "Monday 8:00 AM-5:00 PM" })],
+      assignments: [],
+      cases: [caseItem()],
+      getRouteInfo: () => ({ driveTimeMinutes: null, driveDistanceMiles: null, routeStatus: "missing-coordinates" }),
+    });
+
+    expect(matches[0]?.readinessStatus).toBe("Ready to Assign");
+  });
+
   it("partial schedule mismatch becomes Schedule Conflict", () => {
     const matches = buildMatchesForCase({
       caseItem: caseItem({ requiredDays: ["Monday"], requiredStartTime: "10:00", requiredEndTime: "15:00" }),

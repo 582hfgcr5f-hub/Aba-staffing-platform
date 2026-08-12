@@ -11,6 +11,7 @@ import { useTechnicianDatabase } from "@/app/data/technicians-store";
 import { createTechnicianSlug, downloadTechniciansCsv, getTechnicianClientCount, normalizeState } from "@/app/data/technicians-utils";
 import { type CaseProfile, type ReadinessStatus, type RouteInfo, type SharedMatchResult } from "@/app/data/staffing-types";
 import { type TechnicianProfile } from "@/app/data/technicians";
+import { buildServiceLocationAddress, geocodeServiceLocation } from "@/app/data/geocoding";
 
 const navItems = [
   { label: "Dashboard", icon: "▣", href: "/" },
@@ -602,6 +603,54 @@ function MapPageContent() {
     }
   };
 
+  const handleConfirmCaseLocation = async (caseItem: CaseProfile) => {
+    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
+    const nextAddress = buildServiceLocationAddress({
+      address: caseItem.address,
+      city: caseItem.city,
+      state: caseItem.state,
+      zip: caseItem.zip,
+    });
+
+    if (!nextAddress || !apiKey) {
+      setAssignmentMessage("Google Maps API key is not configured, or the case address is incomplete.");
+      return;
+    }
+
+    try {
+      const result = await geocodeServiceLocation({
+        address: caseItem.address,
+        city: caseItem.city,
+        state: caseItem.state,
+        zip: caseItem.zip,
+      }, apiKey);
+
+      const saved = await upsertCase({
+        ...caseItem,
+        address: result.formattedAddress || caseItem.address,
+        city: result.city || caseItem.city,
+        state: normalizeState(result.state || caseItem.state),
+        zip: result.zip || caseItem.zip,
+        latitude: result.lat,
+        longitude: result.lng,
+      });
+
+      if (!saved.ok) {
+        throw new Error(saved.message);
+      }
+
+      setAssignmentMessage("Service location saved.");
+      setMapDiagnostic("");
+      setLocationConfirmationTarget(null);
+      setPotentialLocation(null);
+      setSelectedCaseId(caseItem.id);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown geocoding error.";
+      setAssignmentMessage(detail);
+      setMapDiagnostic(detail);
+    }
+  };
+
   const handleSelectLocation = async (locationResult: LocationSearchResult) => {
     const confirmationTarget = locationConfirmationTarget;
     setFocusedTechnicianId("");
@@ -1184,7 +1233,14 @@ function MapPageContent() {
                       <p className="mt-1">Status: {selectedCase.status}</p>
                       <p className="mt-1">Required Days: {selectedCase.requiredDays.join(", ") || "N/A"}</p>
                       <p className="mt-1">Schedule: {formatScheduleText(selectedCase.requiredScheduleText, "N/A")}</p>
-                      {selectedCase.latitude === undefined || selectedCase.longitude === undefined ? <button type="button" onClick={() => { setLocationConfirmationTarget({ kind: "Client", id: selectedCase.id }); setSearchTerm(""); setIsSearchOpen(true); }} className="mt-3 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Confirm Location</button> : null}
+                      {selectedCase.latitude === undefined || selectedCase.longitude === undefined ? (
+                        <button type="button" onClick={() => void handleConfirmCaseLocation(selectedCase)} className="mt-3 rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Confirm Location</button>
+                      ) : (
+                        <>
+                          <p className="mt-3 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Location Confirmed</p>
+                          <button type="button" onClick={() => void handleConfirmCaseLocation(selectedCase)} className="mt-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Reconfirm Location</button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ) : selectedType === "none" ? (
