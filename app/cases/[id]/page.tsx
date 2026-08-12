@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { DatabaseState } from "@/app/components/database-state";
 import { DetailNavigation } from "@/app/components/detail-navigation";
+import { PairingConfirmation } from "@/app/components/pairing-confirmation";
 import { formatScheduleText, formatTimeRange, formatUsDate, formatUsDateTime } from "@/app/data/display-formatters";
 import { addOperationalNote, deleteOperationalNote, fetchOperationalActivity, fetchOperationalNotes, logOperationalActivity, type OperationalActivity, type OperationalNote } from "@/app/data/operational-adapter";
 import { useTechnicianDatabase } from "@/app/data/technicians-store";
@@ -17,28 +18,14 @@ const navItems = [
   { label: "Cases", href: "/cases", active: true }, { label: "Interviews", href: "/interviews" }, { label: "Map", href: "/map" },
 ];
 
-function createAssignmentEmail(match: SharedMatchResult) {
-  const subject = `New ABA Case Assignment - ${match.caseItem.name}`;
-  const body = [
-    `Technician: ${match.technician.name}`,
-    `Client: ${match.caseItem.name}`,
-    `Location: ${match.caseItem.address || `${match.caseItem.city}, ${match.caseItem.state}`}`,
-    `Days: ${match.caseItem.requiredDays.join(", ")}`,
-    `Hours: ${formatTimeRange(match.caseItem.requiredStartTime, match.caseItem.requiredEndTime)}`,
-    `Start Date: ${formatUsDate(match.caseItem.startDate, "TBD")}`,
-    `BCBA: ${match.caseItem.bcba || "TBD"}`,
-    `Drive Time: ${match.driveTimeMinutes ?? "Unknown"} minutes`,
-    `Notes: ${match.caseItem.notes || ""}`,
-  ].join("\n");
-
-  return `mailto:${encodeURIComponent(match.technician.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
-
 export default function CaseProfilePage() {
   const params = useParams<{ id: string }>();
   const { cases, technicians, assignments, findMatchingTechnicians, assignCase, unassignCase, markCaseStarted, loading, errorMessage, refreshDatabase } = useTechnicianDatabase();
-  const [pendingMatch, setPendingMatch] = useState<SharedMatchResult | null>(null);
+  const [pairingConfirmation, setPairingConfirmation] = useState<SharedMatchResult | null>(null);
   const [message, setMessage] = useState("");
+  const [isPairing, setIsPairing] = useState(false);
+  const [successToast, setSuccessToast] = useState("");
+  const [manualPickerOpen, setManualPickerOpen] = useState(false);
   const [notes, setNotes] = useState<OperationalNote[]>([]);
   const [activity, setActivity] = useState<OperationalActivity[]>([]);
   const [noteText, setNoteText] = useState("");
@@ -51,6 +38,10 @@ export default function CaseProfilePage() {
     if (!caseItem) return [];
     return assignments.filter((assignment) => assignment.caseId === caseItem.id && assignment.status !== "Unassigned");
   }, [assignments, caseItem]);
+  const sameStateTechnicians = useMemo(() => {
+    if (!caseItem) return [];
+    return technicians.filter((technician) => normalizeState(technician.state) === normalizeState(caseItem.state));
+  }, [caseItem, technicians]);
   const assignmentHistory = useMemo(() => caseItem ? assignments.filter((assignment) => assignment.caseId === caseItem.id) : [], [assignments, caseItem]);
   const readiness = useMemo(() => {
     if (!caseItem) return [];
@@ -62,6 +53,12 @@ export default function CaseProfilePage() {
       { label: "Schedule complete", done: caseItem.requiredDays.length > 0 && Boolean(caseItem.requiredStartTime && caseItem.requiredEndTime) },
     ];
   }, [caseAssignments.length, caseItem]);
+
+  useEffect(() => {
+    if (!successToast) return;
+    const timer = window.setTimeout(() => setSuccessToast(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [successToast]);
 
   useEffect(() => {
     if (!caseItem) return;
@@ -123,6 +120,18 @@ export default function CaseProfilePage() {
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"><p className="font-semibold text-slate-900">BCBA</p><p className="mt-1 text-slate-600">{caseItem.bcba || "Not assigned"}</p><div className="mt-2 flex gap-2">{caseItem.bcbaPhone ? <a href={`tel:${caseItem.bcbaPhone}`} className="font-semibold text-blue-700">Call</a> : null}{caseItem.bcbaEmail ? <a href={`mailto:${caseItem.bcbaEmail}`} className="font-semibold text-blue-700">Email</a> : null}</div></div>
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm"><p className="font-semibold text-slate-900">Preferred contact</p><p className="mt-1 text-slate-600">{caseItem.preferredContact || "Not specified"}</p><Link className="mt-2 inline-block font-semibold text-blue-700" href={`/map?focus=${encodeURIComponent(caseItem.id)}`}>Open map</Link></div>
           </div>
+          {caseAssignments.length === 0 && caseItem.status !== "Active" && caseItem.status !== "Active Client" ? (
+            <button
+              type="button"
+              onClick={() => {
+                const match = matches[0];
+                if (match) setPairingConfirmation(match);
+              }}
+              className="mt-3 rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white"
+            >
+              Pair Technician
+            </button>
+          ) : null}
           {caseAssignments.length > 0 && caseItem.status !== "Active" && caseItem.status !== "Active Client" ? (
             <button
               type="button"
@@ -157,13 +166,13 @@ export default function CaseProfilePage() {
                     <button
                       type="button"
                       onClick={async () => {
-                        if (!confirm("Unassign this technician from the case?")) return;
+                        if (!confirm("Unpair this technician from the case?")) return;
                         const result = await unassignCase(assignment.id);
                         setMessage(result.ok ? "Assignment removed." : result.message);
                       }}
                       className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700"
                     >
-                      Unassign
+                      Unpair Technician
                     </button>
                   </div>
                 );
@@ -185,15 +194,86 @@ export default function CaseProfilePage() {
           </div>
 
           <div className="mt-6 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
-            <h2 className="text-lg font-semibold text-slate-900">Find Matching Technicians</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-slate-900">Find Matching Technicians</h2>
+              <button type="button" onClick={() => setManualPickerOpen((current) => !current)} className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white">Choose Technician</button>
+            </div>
+
+            {manualPickerOpen ? (
+              <div className="mt-4 space-y-3">
+                {sameStateTechnicians.map((technician) => {
+                  const match = matches.find((item) => item.technician.id === technician.id) ?? null;
+                  const isInactive = !["Available", "Assigned", "Active", "Interview"].includes(technician.status);
+                  const hasDuplicateAssignment = Boolean(match?.conflictReasons.some((reason) => reason.code === "duplicate_assignment"));
+                  const hasActualOverlap = Boolean(match?.conflictReasons.some((reason) => reason.code === "existing_case_overlap"));
+                  const blocked = isInactive || hasDuplicateAssignment || hasActualOverlap;
+                  const warning = match && (match.readinessStatus === "Travel Needs Confirmation" || match.readinessStatus === "Needs Availability Confirmation" || match.readinessStatus === "Outside Travel Radius") ? "Travel information is informational for manual pairing." : undefined;
+
+                  return (
+                    <div key={technician.id} className="rounded-2xl border border-slate-200 bg-white p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-slate-900">{technician.name}</p>
+                          <p className="text-sm text-slate-600">{technician.city}, {technician.state}</p>
+                          <p className="mt-1 text-sm text-slate-600">Availability: {technician.hours || technician.availability || "Not provided"}</p>
+                          <p className="mt-1 text-sm text-slate-600">Travel: {match?.driveTimeMinutes ?? "Unknown"} min • {match?.driveDistanceMiles ?? "Unknown"} mi</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{technician.status}</span>
+                      </div>
+                      {warning ? <p className="mt-2 text-xs text-amber-700">Warning: {warning}</p> : null}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={blocked}
+                          onClick={() => {
+                            const selectedMatch = matches.find((item) => item.technician.id === technician.id) ?? ({
+                              technician,
+                              caseItem,
+                              driveTimeMinutes: null,
+                              driveDistanceMiles: null,
+                              scheduleCompatibility: "Unknown",
+                              travelCompatibility: "Unknown",
+                              availabilityStatus: "Needs Confirmation",
+                              currentClientCount: 0,
+                              conflictReasons: [],
+                              readinessStatus: "Travel Needs Confirmation",
+                              transparency: ["Manual pairing override enabled."],
+                            } as SharedMatchResult);
+                            setPairingConfirmation(selectedMatch);
+                            setManualPickerOpen(false);
+                          }}
+                          className={`rounded-xl px-3 py-2 text-xs font-semibold ${blocked ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400" : "bg-blue-600 text-white"}`}
+                        >
+                          {blocked ? "Unavailable" : "Select Technician"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
             <div className="mt-3 space-y-3">
-              {matches.map((match) => (
+              {matches.map((match) => {
+                const blockedReason = match.conflictReasons[0]?.message ?? (match.readinessStatus === "Ready to Assign" ? "Ready to pair" : "Cannot pair with this client.");
+                const isDuplicateAssignment = match.conflictReasons.some((reason) => reason.code === "duplicate_assignment");
+                const isInactiveTechnician = !["Available", "Assigned", "Active", "Interview"].includes(match.technician.status);
+                const isScheduleConflict = match.readinessStatus === "Schedule Conflict" || match.conflictReasons.some((reason) => ["day_unavailable", "hours_mismatch", "existing_case_overlap"].includes(reason.code));
+                const shouldRenderPairButton = !isDuplicateAssignment && !isInactiveTechnician;
+                const pairButtonDisabled = isScheduleConflict;
+                const pairButtonTitle = pairButtonDisabled ? "Schedule Conflict" : blockedReason;
+                return (
                 <div key={match.technician.id} className="rounded-2xl border border-slate-200 bg-white p-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-semibold text-slate-900">{match.technician.name}</p>
                       <p className="text-sm text-slate-600">{match.technician.city}, {match.technician.state}</p>
+                      <p className="mt-1 text-sm text-slate-600">Status: {match.technician.status}</p>
+                      <p className="mt-1 text-sm text-slate-600">Availability: {match.technician.hours || "Not provided"}</p>
                       <p className="mt-1 text-sm text-slate-600">Drive: {match.driveTimeMinutes ?? "Unknown"} min • {match.driveDistanceMiles ?? "Unknown"} mi</p>
+                      <p className="mt-1 text-sm text-slate-600">Current Clients: {match.currentClientCount}</p>
+                      <p className="mt-1 text-sm text-slate-600">Schedule Compatibility: {match.scheduleCompatibility}</p>
+                      <p className="mt-1 text-sm text-slate-600">Readiness: {match.readinessStatus}</p>
                     </div>
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{match.readinessStatus}</span>
                   </div>
@@ -206,43 +286,58 @@ export default function CaseProfilePage() {
                     <a href={`tel:${match.technician.phone}`} className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Call</a>
                     <a href={`mailto:${match.technician.email}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Email</a>
                     <Link href={`/map?focus=${encodeURIComponent(createTechnicianSlug(match.technician.name))}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">View Map</Link>
-                    {match.readinessStatus === "Ready to Assign" ? (
-                      <button type="button" onClick={() => setPendingMatch(match)} className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">Assign Technician</button>
+                    {shouldRenderPairButton ? (
+                      <button
+                        type="button"
+                        disabled={pairButtonDisabled}
+                        title={pairButtonDisabled ? pairButtonTitle : undefined}
+                        onClick={() => setPairingConfirmation(match)}
+                        className={`rounded-xl px-3 py-2 text-xs font-semibold ${pairButtonDisabled ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400" : "bg-blue-600 text-white"}`}
+                      >
+                        {pairButtonDisabled ? "Schedule Conflict" : "Pair Technician"}
+                      </button>
                     ) : null}
                   </div>
+                  {!shouldRenderPairButton ? <p className="mt-2 text-xs text-rose-700">Blocked: {blockedReason}</p> : null}
+                  {pairButtonDisabled ? <p className="mt-2 text-xs text-rose-700">Blocked: {blockedReason}</p> : null}
                 </div>
-              ))}
+              );})}
             </div>
           </div>
 
-          {pendingMatch ? (
-            <div className="mt-6 rounded-[24px] border border-emerald-200 bg-emerald-50 p-4">
-              <h3 className="text-lg font-semibold text-slate-900">Confirm Assignment</h3>
-              <p className="mt-2 text-sm text-slate-700">Revalidation runs again when confirming the assignment.</p>
-              <ul className="mt-3 space-y-1 text-sm text-slate-700">
-                <li>- State match: {normalizeState(pendingMatch.technician.state) === normalizeState(caseItem.state) ? "Pass" : "Fail"}</li>
-                <li>- Drive time within radius: {pendingMatch.travelCompatibility === "Within Radius" ? "Pass" : "Fail"}</li>
-                <li>- Days and hours match: {pendingMatch.scheduleCompatibility === "Full" ? "Pass" : "Fail"}</li>
-                <li>- No overlap: {pendingMatch.conflictReasons.some((reason) => reason.code === "existing_case_overlap") ? "Fail" : "Pass"}</li>
-              </ul>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const result = await assignCase({ technicianId: pendingMatch.technician.id, caseId: caseItem.id });
-                    setMessage(result.ok ? `Assigned ${pendingMatch.technician.name}.` : result.message);
-                    if (result.ok) setPendingMatch(null);
-                  }}
-                  className="rounded-2xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white"
-                >
-                  Confirm Assignment
-                </button>
-                <a href={createAssignmentEmail(pendingMatch)} className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Email Assignment Details</a>
-                <button type="button" onClick={() => setPendingMatch(null)} className="rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>
-              </div>
-            </div>
-          ) : null}
+          <PairingConfirmation
+            open={Boolean(pairingConfirmation)}
+            technicianName={pairingConfirmation?.technician.name ?? ""}
+            caseName={caseItem.name}
+            clientSchedule={caseItem.requiredScheduleText || "Schedule pending"}
+            technicianAvailability={pairingConfirmation?.technician.hours || pairingConfirmation?.technician.availability || "Availability pending"}
+            travelStatus={pairingConfirmation?.readinessStatus === "Travel Needs Confirmation" ? "Needs Confirmation" : pairingConfirmation?.travelCompatibility === "Within Radius" ? "Confirmed" : "Needs Confirmation"}
+            warningMessage={pairingConfirmation && (pairingConfirmation.readinessStatus === "Travel Needs Confirmation" || pairingConfirmation.readinessStatus === "Needs Availability Confirmation") ? "Travel has not been confirmed for this technician and client." : undefined}
+            confirmLabel={pairingConfirmation && (pairingConfirmation.readinessStatus === "Travel Needs Confirmation" || pairingConfirmation.readinessStatus === "Needs Availability Confirmation") ? "Pair Anyway" : "Confirm Pairing"}
+            onCancel={() => setPairingConfirmation(null)}
+            onConfirm={async () => {
+              if (!pairingConfirmation) return;
+              setIsPairing(true);
+              const result = await assignCase({
+                technicianId: pairingConfirmation.technician.id,
+                caseId: caseItem.id,
+                manualOverride: true,
+              });
+              setMessage(result.ok ? `Assigned ${pairingConfirmation.technician.name}.` : `Pairing failed: ${result.message}`);
+              if (result.ok) {
+                setSuccessToast(`Paired ${pairingConfirmation.technician.name} with ${caseItem.name}.`);
+              } else {
+                console.error("Pairing failed", result);
+              }
+              setIsPairing(false);
+              if (result.ok) {
+                setPairingConfirmation(null);
+              }
+            }}
+            isSaving={isPairing}
+          />
 
+          {successToast ? <div role="status" className="fixed bottom-6 right-6 z-[60] rounded-lg bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-lg">{successToast}</div> : null}
           {message ? <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">{message}</div> : null}
           {operationalError ? <p className="mt-4 text-sm text-amber-700">{operationalError}</p> : null}
         </section>

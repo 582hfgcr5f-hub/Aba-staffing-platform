@@ -6,12 +6,14 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DatabaseState } from "@/app/components/database-state";
 import { DetailNavigation } from "@/app/components/detail-navigation";
+import { PairingConfirmation } from "@/app/components/pairing-confirmation";
 import { formatScheduleText, formatTimeRange, formatUsDate, formatUsDateTime, formatWeeklyAvailability } from "@/app/data/display-formatters";
 import { getInterviewResumeUrl } from "@/app/data/interviews-adapter";
 import { addOperationalNote, deleteOperationalNote, deleteTechnicianFile, fetchOperationalActivity, fetchOperationalNotes, getTechnicianFileUrl, logOperationalActivity, uploadTechnicianFile, type OperationalActivity, type OperationalNote } from "@/app/data/operational-adapter";
 import { useTechnicianDatabase } from "@/app/data/technicians-store";
 import { type TechnicianProfile } from "@/app/data/technicians";
 import { createTechnicianSlug, formatCurrencyPerHour, getClientStatusTone, getTechnicianStatusTone, normalizeState, parseTravelMinutes } from "@/app/data/technicians-utils";
+import { type CaseProfile, type SharedMatchResult } from "@/app/data/staffing-types";
 import { getSupabaseBrowserClient } from "@/app/lib/supabase/client";
 
 const navItems = [
@@ -50,7 +52,7 @@ function createAvatar(name: string) {
 export default function TechnicianProfilePage() {
   const router = useRouter();
   const params = useParams<{ id: string }>();
-  const { technicians, cases, assignments, unassignCase, findMatchingCases, upsertTechnician, loading, errorMessage, refreshDatabase } = useTechnicianDatabase();
+  const { technicians, cases, assignments, unassignCase, findMatchingCases, assignCase, upsertTechnician, loading, errorMessage, refreshDatabase } = useTechnicianDatabase();
   const [assignmentMessage, setAssignmentMessage] = useState("");
   const [notes, setNotes] = useState<OperationalNote[]>([]);
   const [activity, setActivity] = useState<OperationalActivity[]>([]);
@@ -58,7 +60,13 @@ export default function TechnicianProfilePage() {
   const [operationalError, setOperationalError] = useState("");
   const [photoUrl, setPhotoUrl] = useState("");
   const [showMatches, setShowMatches] = useState(false);
+  const [pairingCase, setPairingCase] = useState<SharedMatchResult | null>(null);
+  const [showAddClientModal, setShowAddClientModal] = useState(false);
+  const [pendingClientAssignment, setPendingClientAssignment] = useState<CaseProfile | null>(null);
+  const [clientAssignmentInProgress, setClientAssignmentInProgress] = useState(false);
+  const [successToast, setSuccessToast] = useState("");
   const [documentToReplace, setDocumentToReplace] = useState<string | null>(null);
+  const [pairingInProgress, setPairingInProgress] = useState(false);
   const [editProfile, setEditProfile] = useState<TechnicianProfile | null>(null);
   const [editError, setEditError] = useState("");
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -86,6 +94,52 @@ export default function TechnicianProfilePage() {
     return () => window.clearTimeout(timer);
   }, [profile]);
 
+  const travelMinutes = useMemo(() => (profile ? parseTravelMinutes(profile.travelMinutes ?? profile.travelRadius) : null), [profile]);
+  const assignmentsForTechnician = useMemo(
+    () => (profile ? assignments.filter((assignment) => assignment.technicianId === profile.id && assignment.status !== "Unassigned") : []),
+    [assignments, profile]
+  );
+  const assignedClientCards = useMemo(
+    () => assignmentsForTechnician
+      .map((assignment) => {
+        const caseItem = cases.find((item) => item.id === assignment.caseId);
+        if (!caseItem) return null;
+        return {
+          assignmentId: assignment.id,
+          caseId: caseItem.id,
+          clientName: caseItem.name,
+          city: caseItem.city,
+          state: caseItem.state,
+          status: assignment.status,
+          days: caseItem.requiredDays.join(", ") || "Not provided",
+          hours: formatTimeRange(caseItem.requiredStartTime, caseItem.requiredEndTime) || "Not provided",
+          bcba: caseItem.bcba || "Not provided",
+          startDate: caseItem.startDate ? formatUsDate(caseItem.startDate) : "Not available",
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+    [assignmentsForTechnician, cases]
+  );
+  const matchingCases = useMemo(
+    () => (profile ? findMatchingCases(profile.id).filter((match) => normalizeState(match.caseItem.state) === normalizeState(profile.state)) : []),
+    [findMatchingCases, profile]
+  );
+  const addClientCandidates = useMemo(
+    () => (profile ? cases.filter((caseItem) => {
+      const sameState = normalizeState(caseItem.state) === normalizeState(profile.state);
+      const isOpenOrAssigned = ["Open", "Assigned", "Active", "Open Client", "Assigned Client", "Active Client"].includes(caseItem.status);
+      const isAlreadyAssigned = assignments.some((assignment) => assignment.technicianId === profile.id && assignment.caseId === caseItem.id && assignment.status !== "Unassigned");
+      return sameState && isOpenOrAssigned && !isAlreadyAssigned;
+    }).sort((left, right) => left.name.localeCompare(right.name)) : []),
+    [assignments, cases, profile]
+  );
+
+  useEffect(() => {
+    if (!successToast) return;
+    const timer = window.setTimeout(() => setSuccessToast(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [successToast]);
+
   if (loading) {
     return <DatabaseState title="Loading technician details" message="Fetching the latest technician profile from Supabase." />;
   }
@@ -108,14 +162,6 @@ export default function TechnicianProfilePage() {
       </div>
     );
   }
-
-  const travelMinutes = parseTravelMinutes(profile.travelMinutes ?? profile.travelRadius);
-  const assignmentsForTechnician = assignments.filter(
-    (assignment) => assignment.technicianId === profile.id && assignment.status !== "Unassigned"
-  );
-  const matchingCases = findMatchingCases(profile.id).filter(
-    (match) => normalizeState(match.caseItem.state) === normalizeState(profile.state)
-  );
 
   async function handlePhotoUpload(file?: File) {
     if (!file) return;
@@ -167,7 +213,11 @@ export default function TechnicianProfilePage() {
       setAssignmentMessage("Profile photo removed.");
     } catch (error) { setAssignmentMessage(error instanceof Error ? error.message : "Unable to remove the profile photo."); }
   }
-
+  async function handlePairCase(caseId: string) {
+    const match = matchingCases.find((item) => item.caseItem.id === caseId);
+    if (!match) return;
+    setPairingCase(match);
+  }
   async function removeDocument(documentName: string, path?: string) {
     if (!profile || !confirm(`Remove ${documentName}?`)) return;
     const client = getSupabaseBrowserClient();
@@ -385,58 +435,45 @@ export default function TechnicianProfilePage() {
             <div className="mt-8 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
               <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-5">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-semibold text-slate-900">Clients</h2>
-                  <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">{profile.clients.length} Active</span>
+                  <h2 className="text-lg font-semibold text-slate-900">Assigned Clients</h2>
+                  <button type="button" onClick={() => setShowAddClientModal(true)} className="rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white">+ Add Client</button>
                 </div>
                 <div className="mt-4 space-y-3">
-                  {profile.clients.map((client) => {
-                    const linkedCase = cases.find((caseItem) => caseItem.name === client.name);
-                    const linkedAssignment = linkedCase
-                      ? assignmentsForTechnician.find((assignment) => assignment.caseId === linkedCase.id)
-                      : null;
-
-                    return (
-                    <div
-                      key={client.name}
-                      className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
-                    >
+                  {assignedClientCards.length === 0 ? <p className="text-sm text-slate-500">No current client assignments.</p> : null}
+                  {assignedClientCards.map((client) => (
+                    <div key={client.assignmentId} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="font-medium text-slate-800">{client.name}</p>
-                          <p className="mt-1 text-sm text-slate-500">{client.city}{linkedCase ? `, ${linkedCase.state}` : ""}</p>
-                          <p className="mt-1 text-sm text-slate-600">Days: {linkedCase?.requiredDays.join(", ") || "Not provided"}</p>
-                          <p className="text-sm text-slate-600">Hours: {linkedCase ? formatTimeRange(linkedCase.requiredStartTime, linkedCase.requiredEndTime) : formatScheduleText(client.schedule)}</p>
-                          <p className="text-sm text-slate-600">BCBA: {linkedCase?.bcba || "Not provided"}</p>
-                          <p className="text-sm text-slate-600">Assignment date: {formatUsDate(linkedAssignment?.assignedAt)}</p>
-                          {linkedCase?.startDate ? <p className="text-sm text-slate-600">Start date: {formatUsDate(linkedCase.startDate)}</p> : null}
+                          <p className="font-medium text-slate-800">{client.clientName}</p>
+                          <p className="mt-1 text-sm text-slate-500">{client.city}, {client.state}</p>
+                          <p className="mt-1 text-sm text-slate-600">Status: {client.status}</p>
+                          <p className="text-sm text-slate-600">Days: {client.days}</p>
+                          <p className="text-sm text-slate-600">Hours: {client.hours}</p>
+                          <p className="text-sm text-slate-600">BCBA: {client.bcba}</p>
+                          <p className="text-sm text-slate-600">Start Date: {client.startDate}</p>
                         </div>
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${getClientStatusTone(client.status)}`}>
                           {client.status}
                         </span>
                       </div>
-                      {linkedAssignment ? (
-                        <div className="mt-3 flex flex-wrap gap-2">
-                        <Link href={linkedCase ? `/cases/${linkedCase.id}` : "/cases"} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Link href={`/cases/${client.caseId}`} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
                           Open Case
                         </Link>
-                        <Link href={`/map?focus=${encodeURIComponent(linkedCase?.id ?? client.name)}`} className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">View Map</Link>
                         <button
                           type="button"
                           onClick={async () => {
-                            if (!confirm(`Unassign ${profile.name} from ${client.name}?`)) return;
-                            const result = await unassignCase(linkedAssignment.id);
-                            setAssignmentMessage(result.ok ? `Unassigned ${client.name}.` : result.message);
+                            if (!confirm(`Remove ${profile.name} from ${client.clientName}?`)) return;
+                            const result = await unassignCase(client.assignmentId);
+                            setAssignmentMessage(result.ok ? `Unassigned ${client.clientName}.` : result.message);
                           }}
-                          className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700"
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700"
                         >
                           Unassign
                         </button>
-                        </div>
-                      ) : null}
+                      </div>
                     </div>
-                    );
-                  })}
-                  {profile.clients.length === 0 ? <p className="text-sm text-slate-500">No current client assignments.</p> : null}
+                  ))}
                 </div>
               </div>
 
@@ -516,7 +553,10 @@ export default function TechnicianProfilePage() {
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 {matchingCases.map((match) => <div key={match.caseItem.id} className="rounded-2xl border border-blue-100 bg-white p-4">
                   <p className="font-semibold text-slate-900">{match.caseItem.name}</p><p className="mt-1 text-sm text-slate-600">{match.caseItem.city}, {match.caseItem.state} · {formatTimeRange(match.caseItem.requiredStartTime, match.caseItem.requiredEndTime)}</p>
-                  <div className="mt-3 flex gap-2"><Link href={`/cases/${match.caseItem.id}`} className="rounded-xl bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white">Open Case</Link><Link href={`/map?focus=${encodeURIComponent(createTechnicianSlug(profile.name))}`} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700">View Map</Link></div>
+                  <p className="mt-1 text-sm text-slate-600">Drive Time: {match.driveTimeMinutes ?? "Unknown"} min</p>
+                  <p className="mt-1 text-sm text-slate-600">Distance: {match.driveDistanceMiles ?? "Unknown"} mi</p>
+                  <p className="mt-1 text-sm text-slate-600">Compatibility: {match.readinessStatus}</p>
+                  <div className="mt-3 flex flex-wrap gap-2"><Link href={`/cases/${match.caseItem.id}`} className="rounded-xl bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white">Open Case</Link><Link href={`/map?focus=${encodeURIComponent(createTechnicianSlug(profile.name))}`} className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700">View Map</Link><button type="button" onClick={() => void handlePairCase(match.caseItem.id)} disabled={!(match.readinessStatus === "Ready to Assign" || match.readinessStatus === "Travel Needs Confirmation" || match.readinessStatus === "Needs Availability Confirmation")} title={!(match.readinessStatus === "Ready to Assign" || match.readinessStatus === "Travel Needs Confirmation" || match.readinessStatus === "Needs Availability Confirmation") ? match.conflictReasons[0]?.message ?? "This case is blocked" : undefined} className={`rounded-xl px-3 py-1.5 text-xs font-semibold ${(match.readinessStatus === "Ready to Assign" || match.readinessStatus === "Travel Needs Confirmation" || match.readinessStatus === "Needs Availability Confirmation") ? "bg-emerald-600 text-white" : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"}`}>Pair With Client</button></div>
                 </div>)}
               </div>
             </section> : null}
@@ -543,6 +583,127 @@ export default function TechnicianProfilePage() {
               </div>
             ) : null}
           </section>
+
+          {showAddClientModal ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/35 p-4">
+              <div className="w-full max-w-3xl rounded-[28px] border border-slate-200 bg-white p-6 shadow-2xl">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">Add Client</p>
+                    <h3 className="mt-2 text-2xl font-semibold text-slate-900">Choose a case for {profile.name}</h3>
+                  </div>
+                  <button type="button" onClick={() => setShowAddClientModal(false)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">Close</button>
+                </div>
+
+                <div className="mt-5 max-h-[70vh] space-y-3 overflow-y-auto">
+                  {addClientCandidates.length === 0 ? (
+                    <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm text-slate-500">No open or assigned cases are available in {profile.state} for this technician.</p>
+                  ) : null}
+                  {addClientCandidates.map((caseItem) => {
+                    const match = findMatchingCases(profile.id).find((item) => item.caseItem.id === caseItem.id) ?? null;
+                    const isInactive = !["Available", "Assigned", "Active", "Interview"].includes(profile.status);
+                    const hasDuplicateAssignment = assignments.some((assignment) => assignment.technicianId === profile.id && assignment.caseId === caseItem.id && assignment.status !== "Unassigned");
+                    const hasActualOverlap = Boolean(match?.conflictReasons.some((reason) => reason.code === "existing_case_overlap"));
+                    const warnings = [] as string[];
+                    if (match && (match.readinessStatus === "Travel Needs Confirmation" || match.readinessStatus === "Needs Availability Confirmation" || match.readinessStatus === "Outside Travel Radius" || match.driveTimeMinutes == null || match.driveDistanceMiles == null || match.travelCompatibility === "Unknown" || match.availabilityStatus === "Needs Confirmation")) {
+                      warnings.push("Travel or availability is informational only for manual assignment.");
+                    }
+                    const blocked = isInactive || hasDuplicateAssignment || hasActualOverlap;
+
+                    return (
+                      <div key={caseItem.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-slate-900">{caseItem.name}</p>
+                            <p className="text-sm text-slate-600">{caseItem.city}, {caseItem.state}</p>
+                            <p className="mt-1 text-sm text-slate-600">Days: {caseItem.requiredDays.join(", ") || "Not provided"}</p>
+                            <p className="text-sm text-slate-600">Hours: {formatTimeRange(caseItem.requiredStartTime, caseItem.requiredEndTime)}</p>
+                            <p className="text-sm text-slate-600">Status: {caseItem.status}</p>
+                          </div>
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{caseItem.status}</span>
+                        </div>
+                        {warnings.length ? <p className="mt-2 text-xs text-amber-700">Warning: {warnings[0]}</p> : null}
+                        <div className="mt-3 flex justify-end">
+                          <button
+                            type="button"
+                            disabled={blocked}
+                            onClick={() => {
+                              setPendingClientAssignment(caseItem);
+                              setShowAddClientModal(false);
+                            }}
+                            className={`rounded-xl px-3 py-2 text-xs font-semibold ${blocked ? "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400" : "bg-blue-600 text-white"}`}
+                          >
+                            {blocked ? "Unavailable" : "Assign Client"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {pendingClientAssignment ? (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/35 p-4">
+              <div className="w-full max-w-xl rounded-[28px] border border-slate-200 bg-white p-6 shadow-2xl">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-blue-600">Client Assignment</p>
+                <h3 className="mt-3 text-2xl font-semibold text-slate-900">Assign {pendingClientAssignment.name} to {profile.name}?</h3>
+
+                <div className="mt-5 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                  <div>
+                    <p className="font-semibold text-slate-900">Client</p>
+                    <p className="mt-1">{pendingClientAssignment.name}</p>
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-900">Technician</p>
+                    <p className="mt-1">{profile.name}</p>
+                  </div>
+                </div>
+
+                <div className="mt-6 flex flex-wrap justify-end gap-3">
+                  <button type="button" onClick={() => setPendingClientAssignment(null)} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700">Cancel</button>
+                  <button type="button" disabled={clientAssignmentInProgress} onClick={async () => {
+                    setClientAssignmentInProgress(true);
+                    const result = await assignCase({
+                      technicianId: profile.id,
+                      caseId: pendingClientAssignment.id,
+                      manualOverride: true,
+                    });
+                    if (result.ok) {
+                      setSuccessToast(`Assigned ${pendingClientAssignment.name} to ${profile.name}.`);
+                      setPendingClientAssignment(null);
+                    } else {
+                      setAssignmentMessage(result.message);
+                    }
+                    setClientAssignmentInProgress(false);
+                  }} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">
+                    {clientAssignmentInProgress ? "Confirming..." : "Confirm Assignment"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {successToast ? <div role="status" className="fixed bottom-6 right-6 z-[70] rounded-lg bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-lg">{successToast}</div> : null}
+
+          <PairingConfirmation
+            open={Boolean(pairingCase)}
+            technicianName={profile.name}
+            caseName={pairingCase?.caseItem.name ?? ""}
+            clientSchedule={pairingCase?.caseItem.requiredScheduleText || "Schedule pending"}
+            technicianAvailability={profile.hours || profile.availability || "Availability pending"}
+            onCancel={() => setPairingCase(null)}
+            onConfirm={async () => {
+              if (!pairingCase) return;
+              setPairingInProgress(true);
+              const result = await assignCase({ technicianId: profile.id, caseId: pairingCase.caseItem.id });
+              setAssignmentMessage(result.ok ? `Paired ${profile.name} with ${pairingCase.caseItem.name}.` : result.message);
+              setPairingInProgress(false);
+              if (result.ok) setPairingCase(null);
+            }}
+            isSaving={pairingInProgress}
+          />
 
           {editProfile ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">

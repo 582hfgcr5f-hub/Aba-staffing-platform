@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { DatabaseState } from "@/app/components/database-state";
+import { PairingConfirmation } from "@/app/components/pairing-confirmation";
 import { formatDaysSummary, formatRequiredScheduleSummary, normalizeRequiredCaseWindow } from "@/app/data/smart-match-engine";
 import { useTechnicianDatabase } from "@/app/data/technicians-store";
 import { createTechnicianSlug, normalizeState } from "@/app/data/technicians-utils";
@@ -153,15 +154,6 @@ export default function StaffingQueuePage() {
     });
   }, [filter, queueRows, search, sortBy]);
 
-  const handleAssign = async () => {
-    if (!selectedRow?.bestMatch) return;
-    setIsSaving(true);
-    const result = await assignCase({ technicianId: selectedRow.bestMatch.technician.id, caseId: selectedRow.caseItem.id });
-    setMessage(result.ok ? `Assigned ${selectedRow.bestMatch.technician.name} to ${selectedRow.caseItem.name}.` : result.message);
-    setIsSaving(false);
-    if (result.ok) setSelectedRow(null);
-  };
-
   const handleStart = async (caseId: string) => {
     setIsSaving(true);
     const result = await markCaseStarted(caseId);
@@ -218,7 +210,32 @@ export default function StaffingQueuePage() {
         </main>
       </div>
 
-      {selectedRow ? <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-950/30 p-4"><section className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"><h2 className="text-xl font-semibold text-slate-900">{selectedRow.bestMatch?.readinessStatus === "Ready to Assign" ? "Confirm Assignment" : "Match Review"}</h2><p className="mt-2 text-sm text-slate-600">{selectedRow.caseItem.name} | {selectedRow.caseItem.city}, {formatState(selectedRow.caseItem.state)}</p>{selectedRow.bestMatch ? <div className="mt-4 rounded-lg bg-slate-50 p-4 text-sm text-slate-700"><p className="font-semibold">{selectedRow.bestMatch.technician.name}</p><p className="mt-1">Status: {selectedRow.bestMatch.readinessStatus}</p><ul className="mt-2 space-y-1 text-xs">{selectedRow.bestMatch.transparency.slice(0, 5).map((item) => <li key={item}>- {item}</li>)}</ul></div> : <p className="mt-4 text-sm text-slate-600">No same-state candidate is currently eligible.</p>}<div className="mt-5 flex flex-wrap gap-2">{selectedRow.bestMatch?.readinessStatus === "Ready to Assign" ? <button type="button" disabled={isSaving} onClick={() => void handleAssign()} className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{isSaving ? "Saving..." : "Confirm Assignment"}</button> : <Link href={`/cases/${selectedRow.caseItem.id}`} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white">{selectedRow.bestMatch ? "Open Case Details" : "View Matches"}</Link>}<button type="button" onClick={() => setSelectedRow(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button></div></section></div> : null}
+      {selectedRow ? (
+        <PairingConfirmation
+          open={Boolean(selectedRow.bestMatch)}
+          technicianName={selectedRow.bestMatch?.technician.name ?? ""}
+          caseName={selectedRow.caseItem.name}
+          clientSchedule={selectedRow.caseItem.requiredScheduleText || "Schedule pending"}
+          technicianAvailability={selectedRow.bestMatch?.technician.hours || selectedRow.bestMatch?.technician.availability || "Availability pending"}
+          travelStatus={selectedRow.bestMatch?.readinessStatus === "Travel Needs Confirmation" || selectedRow.bestMatch?.readinessStatus === "Outside Travel Radius" ? "Needs Confirmation" : selectedRow.bestMatch?.travelCompatibility === "Within Radius" ? "Confirmed" : "Needs Confirmation"}
+          warningMessage={selectedRow.bestMatch && (selectedRow.bestMatch.readinessStatus === "Travel Needs Confirmation" || selectedRow.bestMatch.readinessStatus === "Needs Availability Confirmation" || selectedRow.bestMatch.readinessStatus === "Outside Travel Radius") ? "Travel has not been confirmed for this technician and client." : undefined}
+          confirmLabel={selectedRow.bestMatch && (selectedRow.bestMatch.readinessStatus === "Travel Needs Confirmation" || selectedRow.bestMatch.readinessStatus === "Needs Availability Confirmation" || selectedRow.bestMatch.readinessStatus === "Outside Travel Radius") ? "Pair Anyway" : "Confirm Pairing"}
+          onCancel={() => setSelectedRow(null)}
+          onConfirm={async () => {
+            if (!selectedRow.bestMatch) return;
+            setIsSaving(true);
+            const result = await assignCase({
+              technicianId: selectedRow.bestMatch.technician.id,
+              caseId: selectedRow.caseItem.id,
+              manualOverride: selectedRow.bestMatch.readinessStatus === "Travel Needs Confirmation" || selectedRow.bestMatch.readinessStatus === "Needs Availability Confirmation" || selectedRow.bestMatch.readinessStatus === "Outside Travel Radius",
+            });
+            setMessage(result.ok ? `Paired ${selectedRow.bestMatch.technician.name} with ${selectedRow.caseItem.name}.` : result.message);
+            setIsSaving(false);
+            if (result.ok) setSelectedRow(null);
+          }}
+          isSaving={isSaving}
+        />
+      ) : null}
     </div>
   );
 }

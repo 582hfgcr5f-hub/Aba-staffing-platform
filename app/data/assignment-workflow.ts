@@ -50,6 +50,44 @@ export function deriveAssignmentStatus(startDate?: string): AssignmentRecord["st
   return parsed <= new Date() ? "Active" : "Assigned";
 }
 
+export function buildPairingConfirmation(input: {
+  technicianName: string;
+  caseName: string;
+  clientSchedule: string;
+  technicianAvailability: string;
+  travelStatus?: string;
+}) {
+  return [
+    `Pair ${input.technicianName} with ${input.caseName}?`,
+    "Case:",
+    input.clientSchedule,
+    "Travel:",
+    input.travelStatus ?? "Needs Confirmation",
+    "Technician availability:",
+    input.technicianAvailability,
+  ].join("\n");
+}
+
+export function canManuallyPair(match: SharedMatchResult | null | undefined) {
+  if (!match) return false;
+
+  const hardBlockerCodes = new Set([
+    "state_mismatch",
+    "day_unavailable",
+    "hours_mismatch",
+    "existing_case_overlap",
+    "status_not_eligible",
+    "invalid_time_range",
+    "duplicate_assignment",
+  ]);
+
+  if (match.readinessStatus === "Ready to Assign") return true;
+  if (match.conflictReasons.some((reason) => hardBlockerCodes.has(reason.code))) return false;
+  if (match.readinessStatus === "Travel Needs Confirmation") return true;
+  if (match.readinessStatus === "Needs Availability Confirmation") return true;
+  return false;
+}
+
 function caseToClientSchedule(caseItem: CaseProfile) {
   const normalized = normalizeRequiredCaseWindow(caseItem.requiredStartTime, caseItem.requiredEndTime);
   if (!normalized || normalized.isAmbiguous) {
@@ -117,6 +155,7 @@ export function assignCaseInDatabase(input: {
   technicianId: string;
   caseId: string;
   assignedBy?: string;
+  manualOverride?: boolean;
   getRouteInfo: (technician: TechnicianProfile, caseItem: CaseProfile) => RouteInfo;
 }):
   | {
@@ -148,8 +187,13 @@ export function assignCaseInDatabase(input: {
     return { ok: false, message: "Assignment cannot be completed. Match data is unavailable." };
   }
 
-  const validation = validateAssignment(currentMatch);
+  const validation = validateAssignment(currentMatch, input.manualOverride);
   if (!validation.ok) {
+    const specific = validation.reasons[0]?.message ?? "A new conflict was detected.";
+    return { ok: false, message: `Assignment cannot be completed. ${specific}` };
+  }
+
+  if (input.manualOverride && !canManuallyPair(currentMatch)) {
     const specific = validation.reasons[0]?.message ?? "A new conflict was detected.";
     return { ok: false, message: `Assignment cannot be completed. ${specific}` };
   }

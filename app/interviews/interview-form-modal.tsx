@@ -23,12 +23,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function InterviewFormModal({ initial, cases, saving, saveError, onClose: closeModal, onSave, onRemoveResume, onViewResume }: { initial: Draft; cases: CaseProfile[]; saving: boolean; saveError: string; onClose: () => void; onSave: (draft: Draft, file: File | null) => void; onRemoveResume: (draft: Draft) => void; onViewResume: (draft: Draft) => void }) {
   const [form, setForm] = useState<Draft>(initial); const [file, setFile] = useState<File | null>(null); const [errors, setErrors] = useState<Errors>({}); const [resumeError, setResumeError] = useState("");
-  const isDirty = JSON.stringify(form) !== JSON.stringify(initial) || file !== null;
   const onClose = useCallback(() => {
     if (saving) return;
-    if (isDirty && !window.confirm("Discard unsaved changes?")) return;
     closeModal();
-  }, [closeModal, isDirty, saving]);
+  }, [closeModal, saving]);
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", handleKeyDown);

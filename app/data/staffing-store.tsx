@@ -5,6 +5,7 @@ import {
   assignCaseInDatabase,
   unassignCaseInDatabase,
 } from "./assignment-workflow";
+import { logOperationalActivity } from "./operational-adapter";
 import {
   buildMatchesForCase,
   buildMatchesForTechnician,
@@ -65,6 +66,7 @@ type AssignCaseParams = {
   technicianId: string;
   caseId: string;
   assignedBy?: string;
+  manualOverride?: boolean;
 };
 
 type StaffingStoreValue = StaffingDatabase & {
@@ -230,12 +232,25 @@ export function StaffingDatabaseProvider({ children }: { children: ReactNode }) 
       technicianId: params.technicianId,
       caseId: params.caseId,
       assignedBy: params.assignedBy,
+      manualOverride: params.manualOverride,
       getRouteInfo,
     });
 
     if (!result.ok) return result;
 
     await insertAssignmentRecord(client, result.assignment);
+    if (params.manualOverride) {
+      const technician = latest.technicians.find((item) => item.id === params.technicianId);
+      const caseItem = latest.cases.find((item) => item.id === params.caseId);
+      if (technician && caseItem) {
+        await logOperationalActivity(client, {
+          technicianId: technician.id,
+          caseId: caseItem.id,
+          eventType: "Manual pairing override confirmed",
+          detail: `Manual confirmation: ${technician.name} paired with ${caseItem.name} despite unresolved travel review.`,
+        });
+      }
+    }
     await refreshDatabase();
 
     return {
