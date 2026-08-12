@@ -548,21 +548,9 @@ export function rankCaseMatchesForTechnician(a: SharedMatchResult, b: SharedMatc
   return a.caseItem.name.localeCompare(b.caseItem.name);
 }
 
-export function validateAssignment(match: SharedMatchResult, manualOverride = false): AssignmentValidationResult {
-  const hardBlockerCodes = new Set([
-    "state_mismatch",
-    "day_unavailable",
-    "hours_mismatch",
-    "existing_case_overlap",
-    "status_not_eligible",
-    "invalid_time_range",
-    "duplicate_assignment",
-  ]);
-
-  const hasHardBlocker = match.conflictReasons.some((reason) => hardBlockerCodes.has(reason.code));
-
+export function validateAssignment(match: SharedMatchResult): AssignmentValidationResult {
   return {
-    ok: manualOverride ? !hasHardBlocker : match.readinessStatus === "Ready to Assign",
+    ok: match.readinessStatus === "Ready to Assign",
     readinessStatus: match.readinessStatus,
     reasons: match.conflictReasons,
     transparency: match.transparency,

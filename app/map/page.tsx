@@ -1275,7 +1275,7 @@ function MapPageContent() {
                               <a href={`tel:${match.technician.phone}`} className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-semibold text-white">Call</a>
                               <a href={`mailto:${match.technician.email}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">Email</a>
                               <Link href={`/map?focus=${encodeURIComponent(createTechnicianSlug(match.technician.name))}`} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700">View Map</Link>
-                              {(readiness === "Ready to Assign" || readiness === "Travel Needs Confirmation" || readiness === "Needs Availability Confirmation") ? (
+                              {readiness === "Ready to Assign" ? (
                                 <button type="button" onClick={() => setPendingMatch(match)} className="rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white">Assign Technician</button>
                               ) : null}
                             </div>

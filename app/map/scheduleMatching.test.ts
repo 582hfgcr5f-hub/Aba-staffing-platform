@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   assignCaseInDatabase,
-  buildPairingConfirmation,
-  canManuallyPair,
   nextTechnicianStatus,
   recomputeDerivedData,
   unassignCaseInDatabase,
@@ -108,46 +106,6 @@ describe("schedule parsing", () => {
         endMinutes: 1020,
       })
     ).toBe("Monday-Friday, 9:00 AM-5:00 PM");
-  });
-});
-
-describe("pairing workflow copy", () => {
-  it("formats the required pairing confirmation prompt", () => {
-    expect(
-      buildPairingConfirmation({
-        technicianName: "Kristy Parker",
-        caseName: "Eri Mortan",
-        clientSchedule: "Monday-Friday, 9:00 AM-5:00 PM",
-        technicianAvailability: "Monday-Friday, 8:00 AM-5:00 PM",
-        travelStatus: "Needs Confirmation",
-      })
-    ).toBe(
-      "Pair Kristy Parker with Eri Mortan?\nCase:\nMonday-Friday, 9:00 AM-5:00 PM\nTravel:\nNeeds Confirmation\nTechnician availability:\nMonday-Friday, 8:00 AM-5:00 PM"
-    );
-  });
-
-  it("allows manual pairing when only travel is unconfirmed and blocks true incompatibilities", () => {
-    const travelWarning = buildMatchesForCase({
-      caseItem: caseItem(),
-      technicians: [tech()],
-      assignments: [],
-      cases: [caseItem()],
-      getRouteInfo: () => ({ driveTimeMinutes: null, driveDistanceMiles: null, routeStatus: "route-failed" }),
-    })[0];
-
-    expect(travelWarning?.readinessStatus).toBe("Travel Needs Confirmation");
-    expect(canManuallyPair(travelWarning!)).toBe(true);
-
-    const hardBlock = buildMatchesForCase({
-      caseItem: caseItem({ state: "IA" }),
-      technicians: [tech({ state: "NM" })],
-      assignments: [],
-      cases: [caseItem({ state: "IA" })],
-      getRouteInfo: () => ({ driveTimeMinutes: 18, driveDistanceMiles: 8, routeStatus: "ok" }),
-    })[0];
-
-    expect(hardBlock?.readinessStatus).toBe("Different State");
-    expect(canManuallyPair(hardBlock!)).toBe(false);
   });
 });
 
